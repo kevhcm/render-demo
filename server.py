@@ -10,6 +10,15 @@ from cut_csv import cut_first_rows
 app = Flask(__name__)
 
 
+@app.route("/", methods=["GET"])
+def index() -> Response:
+    # Render often points users at the root URL; provide a friendly landing page.
+    return Response(
+        "CSV Cut Demo. Use POST /cut with multipart form-data fields: file=<csv> and optional n=<int>.\n",
+        mimetype="text/plain",
+    )
+
+
 @app.route("/health", methods=["GET"])
 def health() -> Response:
     return Response("ok\n", mimetype="text/plain")
