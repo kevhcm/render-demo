@@ -102,6 +102,14 @@ print(f"Training on years: {df['year'].min()} to {df['year'].max()}")
 print(f"Data points used for training: {len(df)} rows")
 print(f"Full dataset years available: {df_original['year'].min()} to {df_original['year'].max()}")
 
+# Demo runtime guard: restrict to a small set of counties early, so the heavy
+# growth-rate + lagged-feature loops don't run across the entire dataset.
+if MAX_COUNTIES and MAX_COUNTIES > 0:
+    counties_to_process = list(df["county"].unique())[:MAX_COUNTIES]
+    df = df[df["county"].isin(counties_to_process)].copy()
+    df_original = df_original[df_original["county"].isin(counties_to_process)].copy()
+    print(f"\nLimiting to first {len(counties_to_process)} counties for demo runtime.")
+
 # 4. Calculate Population Growth Rate for Each County (on training data)
 print("\nCalculating population growth rates on training data...")
 
