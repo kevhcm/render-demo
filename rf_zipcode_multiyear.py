@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-depth", type=int, default=6)
 
     ap.add_argument("--no-plots", action="store_true", help="Do not call plt.show() (still saves plots)")
+    ap.add_argument("--no-zip", action="store_true", help="Skip converting county predictions to zip predictions")
     return ap.parse_args()
 
 
@@ -57,6 +58,7 @@ MAX_COUNTIES = args.max_counties
 RF_N_ESTIMATORS = args.n_estimators
 RF_MAX_DEPTH = args.max_depth
 NO_PLOTS = args.no_plots
+NO_ZIP = args.no_zip
 
 output_dir = os.path.dirname(output_path) or "."
 os.makedirs(output_dir, exist_ok=True)
@@ -125,25 +127,26 @@ for county in df['county'].unique():
             growth_rate = ((current_pop - previous_pop) / previous_pop) * 100
             df.loc[current_idx, 'population_growth_rate'] = growth_rate
 
-# Also calculate growth rates for original data (for comparison on graph)
-print("\nCalculating population growth rates on full dataset (for graphing)...")
-df_original = df_original.sort_values(['county', 'year']).reset_index(drop=True)
-df_original['population_growth_rate'] = np.nan
+if not NO_PLOTS:
+    # Also calculate growth rates for original data (for comparison on graph)
+    print("\nCalculating population growth rates on full dataset (for graphing)...")
+    df_original = df_original.sort_values(['county', 'year']).reset_index(drop=True)
+    df_original['population_growth_rate'] = np.nan
 
-for county in df_original['county'].unique():
-    county_mask = df_original['county'] == county
-    county_data = df_original[county_mask].copy()
-    
-    for i in range(1, len(county_data)):
-        current_idx = county_data.index[i]
-        previous_idx = county_data.index[i-1]
+    for county in df_original['county'].unique():
+        county_mask = df_original['county'] == county
+        county_data = df_original[county_mask].copy()
         
-        current_pop = df_original.loc[current_idx, 'population']
-        previous_pop = df_original.loc[previous_idx, 'population']
-        
-        if previous_pop != 0:
-            growth_rate = ((current_pop - previous_pop) / previous_pop) * 100
-            df_original.loc[current_idx, 'population_growth_rate'] = growth_rate
+        for i in range(1, len(county_data)):
+            current_idx = county_data.index[i]
+            previous_idx = county_data.index[i-1]
+            
+            current_pop = df_original.loc[current_idx, 'population']
+            previous_pop = df_original.loc[previous_idx, 'population']
+            
+            if previous_pop != 0:
+                growth_rate = ((current_pop - previous_pop) / previous_pop) * 100
+                df_original.loc[current_idx, 'population_growth_rate'] = growth_rate
 
 # 5. Add Lagged Growth Rate Features (t-1 and t-2) on training data
 print("\nAdding lagged growth rate features (t-1 and t-2)...")
@@ -185,10 +188,11 @@ for county in df['county'].unique():
     county_data_with_growth = county_data[county_data['population_growth_rate'].notna()]
     county_timeseries[county] = county_data_with_growth
 
-# Organize full original data
-for county in df_original['county'].unique():
-    county_data_full = df_original[df_original['county'] == county].sort_values('year')
-    county_timeseries_full[county] = county_data_full
+if not NO_PLOTS:
+    # Organize full original data
+    for county in df_original['county'].unique():
+        county_data_full = df_original[df_original['county'] == county].sort_values('year')
+        county_timeseries_full[county] = county_data_full
 
 print(f"\nTotal unique counties in training: {len(county_timeseries)}")
 print(f"Total unique counties in full dataset: {len(county_timeseries_full)}")
@@ -325,104 +329,104 @@ if len(results) > 0:
 else:
     print("\nNo predictions generated - no counties had enough data!")
 
-# 10. Convert County Predictions to Zip Code Predictions
-print("\n" + "="*60)
-print("CONVERTING TO ZIP CODE PREDICTIONS")
-print("="*60)
+if not NO_ZIP:
+    # 10. Convert County Predictions to Zip Code Predictions
+    print("\n" + "="*60)
+    print("CONVERTING TO ZIP CODE PREDICTIONS")
+    print("="*60)
 
-# Load zip to county mapping
-print(f"\nLoading zip to county mapping from: {zip_to_county_path}")
-zip_to_county_df = pd.read_csv(zip_to_county_path, dtype={'ZIP': str})
+    # Load zip to county mapping
+    print(f"\nLoading zip to county mapping from: {zip_to_county_path}")
+    zip_to_county_df = pd.read_csv(zip_to_county_path, dtype={'ZIP': str})
 
-print(f"Loaded {len(zip_to_county_df)} zip-county mappings")
-print(f"Columns: {list(zip_to_county_df.columns)}")
-print("\nSample data:")
-print(zip_to_county_df.head(5))
+    print(f"Loaded {len(zip_to_county_df)} zip-county mappings")
+    print(f"Columns: {list(zip_to_county_df.columns)}")
+    print("\nSample data:")
+    print(zip_to_county_df.head(5))
 
-# Strip " County" suffix from the zip CSV county column (e.g. "Madison County" -> "Madison")
-zip_to_county_df['county_name'] = zip_to_county_df['County'].str.replace(r'\s+County$', '', regex=True).str.strip()
+    # Strip " County" suffix from the zip CSV county column (e.g. "Madison County" -> "Madison")
+    zip_to_county_df['county_name'] = zip_to_county_df['County'].str.replace(r'\s+County$', '', regex=True).str.strip()
 
-# Also strip " County" from predictions_df in case source data included it
-predictions_df['county_clean'] = predictions_df['county'].str.replace(r'\s+County$', '', regex=True).str.strip()
+    # Also strip " County" from predictions_df in case source data included it
+    predictions_df['county_clean'] = predictions_df['county'].str.replace(r'\s+County$', '', regex=True).str.strip()
 
-# Derive each ZIP's share of its county's total population.
-# The CSV column '% of ZIP Residents in County' tells us what fraction of a ZIP's
-# residents belong to a given county — NOT what fraction of the county lives in that ZIP.
-# To get the correct apportionment (ZIP share of county), we:
-#   1. Compute how many of each ZIP's residents belong to each county
-#      (zip_pop * pct_of_zip_in_county)
-#   2. Sum those contributions per county to get the county total implied by the ZIP data
-#   3. Divide each ZIP's contribution by the county total -> ZIP's share of county
-zip_to_county_df['zip_pop'] = pd.to_numeric(zip_to_county_df['ZIP Code Population'], errors='coerce')
-zip_to_county_df['zip_pop_in_county'] = (
-    zip_to_county_df['zip_pop'] * zip_to_county_df['% of ZIP Residents in County']
-)
+    # Derive each ZIP's share of its county's total population.
+    zip_to_county_df['zip_pop'] = pd.to_numeric(zip_to_county_df['ZIP Code Population'], errors='coerce')
+    zip_to_county_df['zip_pop_in_county'] = (
+        zip_to_county_df['zip_pop'] * zip_to_county_df['% of ZIP Residents in County']
+    )
 
-county_totals = (
-    zip_to_county_df.groupby('county_name')['zip_pop_in_county']
-    .sum()
-    .rename('county_total_from_zips')
-)
-zip_to_county_df = zip_to_county_df.join(county_totals, on='county_name')
-zip_to_county_df['pct_of_county'] = (
-    zip_to_county_df['zip_pop_in_county'] / zip_to_county_df['county_total_from_zips']
-)
+    county_totals = (
+        zip_to_county_df.groupby('county_name')['zip_pop_in_county']
+        .sum()
+        .rename('county_total_from_zips')
+    )
+    zip_to_county_df = zip_to_county_df.join(county_totals, on='county_name')
+    zip_to_county_df['pct_of_county'] = (
+        zip_to_county_df['zip_pop_in_county'] / zip_to_county_df['county_total_from_zips']
+    )
 
-# Verify the county name matching
-csv_counties = set(zip_to_county_df['county_name'].unique())
-pred_counties = set(predictions_df['county_clean'].unique())
-matched = csv_counties & pred_counties
-unmatched_csv = csv_counties - pred_counties
-unmatched_pred = pred_counties - csv_counties
-print(f"\nCounty matching: {len(matched)} matched")
-if unmatched_csv:
-    print(f"In zip CSV but not in predictions: {sorted(unmatched_csv)}")
-if unmatched_pred:
-    print(f"In predictions but not in zip CSV: {sorted(unmatched_pred)}")
+    # Verify the county name matching
+    csv_counties = set(zip_to_county_df['county_name'].unique())
+    pred_counties = set(predictions_df['county_clean'].unique())
+    matched = csv_counties & pred_counties
+    unmatched_csv = csv_counties - pred_counties
+    unmatched_pred = pred_counties - csv_counties
+    print(f"\nCounty matching: {len(matched)} matched")
+    if unmatched_csv:
+        print(f"In zip CSV but not in predictions: {sorted(unmatched_csv)}")
+    if unmatched_pred:
+        print(f"In predictions but not in zip CSV: {sorted(unmatched_pred)}")
 
-# Generate zip code predictions for each prediction year
-for pred_year in PREDICTION_YEARS:
-    print(f"\nGenerating zip code predictions for {pred_year}...")
+    # Generate zip code predictions for each prediction year
+    for pred_year in PREDICTION_YEARS:
+        print(f"\nGenerating zip code predictions for {pred_year}...")
 
-    pop_col = f'population_{pred_year}'
+        pop_col = f'population_{pred_year}'
 
-    # Build lookup: cleaned county name -> predicted population
-    county_pop_lookup = dict(zip(predictions_df['county_clean'], predictions_df[pop_col]))
+        # Build lookup: cleaned county name -> predicted population
+        county_pop_lookup = dict(zip(predictions_df['county_clean'], predictions_df[pop_col]))
 
-    zipcode_predictions = []
+        zipcode_predictions = []
 
-    for zip_code, zip_group in zip_to_county_df.groupby('ZIP'):
-        total_population = 0.0
+        for zip_code, zip_group in zip_to_county_df.groupby('ZIP'):
+            total_population = 0.0
 
-        for _, row in zip_group.iterrows():
-            county_name = row['county_name']
-            pct = row['pct_of_county']  # this ZIP's share of the county population
+            for _, row in zip_group.iterrows():
+                county_name = row['county_name']
+                pct = row['pct_of_county']  # this ZIP's share of the county population
 
-            if county_name in county_pop_lookup and pd.notna(pct):
-                county_population = county_pop_lookup[county_name]
-                total_population += county_population * pct
+                if county_name in county_pop_lookup and pd.notna(pct):
+                    county_population = county_pop_lookup[county_name]
+                    total_population += county_population * pct
 
-        zipcode_predictions.append({
-            'zip_code': zip_code,
-            'predicted_population': round(total_population, 3)
-        })
+            zipcode_predictions.append({
+                'zip_code': zip_code,
+                'predicted_population': round(total_population, 3)
+            })
 
-    zipcode_df = pd.DataFrame(zipcode_predictions).sort_values('zip_code').reset_index(drop=True)
+        zipcode_df = pd.DataFrame(zipcode_predictions).sort_values('zip_code').reset_index(drop=True)
 
-    output_filename = os.path.join(zipcode_output_dir, f'{pred_year}_zipcode_predictions_randforest.csv')
-    zipcode_df.to_csv(output_filename, index=False, float_format='%.3f')
+        output_filename = os.path.join(zipcode_output_dir, f'{pred_year}_zipcode_predictions_randforest.csv')
+        zipcode_df.to_csv(output_filename, index=False, float_format='%.3f')
 
-    print(f"Saved zip code predictions to: {output_filename}")
-    print(f"Total zip codes: {len(zipcode_df)}")
-    print(f"\nSample predictions for {pred_year}:")
-    print(zipcode_df.head(10))
+        print(f"Saved zip code predictions to: {output_filename}")
+        print(f"Total zip codes: {len(zipcode_df)}")
+        print(f"\nSample predictions for {pred_year}:")
+        print(zipcode_df.head(10))
 
-print("\nZip code prediction conversion complete!")
+    print("\nZip code prediction conversion complete!")
 
-# 11. Model Evaluation
-print("\n" + "="*60)
-print("MODEL EVALUATION")
-print("="*60)
+if not NO_PLOTS:
+    # 11. Model Evaluation
+    print("\n" + "="*60)
+    print("MODEL EVALUATION")
+    print("="*60)
+
+# If we're in demo mode, stop after producing the requested CSV outputs.
+if NO_PLOTS:
+    print("\nSkipping model evaluation and graphing (demo mode).")
+    raise SystemExit(0)
 
 # Evaluate on the selected county or first available
 if COUNTY_TO_GRAPH and COUNTY_TO_GRAPH in county_timeseries:

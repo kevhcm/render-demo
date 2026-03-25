@@ -113,6 +113,10 @@ def rf() -> Response:
     if not prediction_years:
         prediction_years = "2024,2025,2026"
 
+    # If user asked for a specific year output, restrict computation to that year.
+    if return_year is not None:
+        prediction_years = str(return_year)
+
     # Script path inside the Render app directory.
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(script_dir, "rf_zipcode_multiyear.py")
@@ -147,6 +151,11 @@ def rf() -> Response:
             str(max_depth),
             "--no-plots",
         ]
+
+        # For the demo, if we only need the county forecast CSV, skip zip conversion
+        # to avoid hitting Render request timeouts.
+        if return_year is None:
+            cmd.append("--no-zip")
 
         proc = subprocess.run(
             cmd,
