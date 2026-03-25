@@ -76,6 +76,13 @@ print(f"Years in dataset: {sorted(df_original['year'].unique())}")
 print(f"Counties in dataset: {df_original['county'].nunique()}")
 print(f"\nAvailable counties: {sorted(df_original['county'].unique())}")
 
+# For demo/runtime safety, limit to a small subset of counties before
+# expensive numeric cleaning.
+if MAX_COUNTIES and MAX_COUNTIES > 0:
+    counties_to_process = list(df_original["county"].unique())[:MAX_COUNTIES]
+    df_original = df_original[df_original["county"].isin(counties_to_process)].copy()
+    print(f"\nDemo filter: limiting to first {len(counties_to_process)} counties before cleaning.")
+
 # 2. Data Validation and Cleaning
 print("\nCleaning data...")
 
