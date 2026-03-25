@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-counties", type=int, default=10, help="Max counties to process (limit runtime)")
     ap.add_argument("--n-estimators", type=int, default=100)
     ap.add_argument("--max-depth", type=int, default=6)
+    ap.add_argument("--n-jobs", type=int, default=1, help="RandomForest n_jobs (use 1 on Render to avoid OMP issues)")
 
     ap.add_argument("--no-plots", action="store_true", help="Do not call plt.show() (still saves plots)")
     ap.add_argument("--no-zip", action="store_true", help="Skip converting county predictions to zip predictions")
@@ -57,6 +58,7 @@ COUNTY_TO_GRAPH = args.county_to_graph
 MAX_COUNTIES = args.max_counties
 RF_N_ESTIMATORS = args.n_estimators
 RF_MAX_DEPTH = args.max_depth
+RF_N_JOBS = args.n_jobs
 NO_PLOTS = args.no_plots
 NO_ZIP = args.no_zip
 
@@ -111,29 +113,18 @@ if MAX_COUNTIES and MAX_COUNTIES > 0:
     print(f"\nLimiting to first {len(counties_to_process)} counties for demo runtime.")
 
 # 4. Calculate Population Growth Rate for Each County (on training data)
-print("\nCalculating population growth rates on training data...")
+print("\nCalculating population growth rates on training data (vectorized)...")
 
-# Sort by county and year
-df = df.sort_values(['county', 'year']).reset_index(drop=True)
+# Sort by county and year for correct pct_change ordering.
+df = df.sort_values(["county", "year"]).reset_index(drop=True)
 
-# Calculate growth rate: (current - previous) / previous * 100
-df['population_growth_rate'] = np.nan
-
-for county in df['county'].unique():
-    county_mask = df['county'] == county
-    county_data = df[county_mask].copy()
-    
-    # Calculate growth rate for each year (except the first)
-    for i in range(1, len(county_data)):
-        current_idx = county_data.index[i]
-        previous_idx = county_data.index[i-1]
-        
-        current_pop = df.loc[current_idx, 'population']
-        previous_pop = df.loc[previous_idx, 'population']
-        
-        if previous_pop != 0:
-            growth_rate = ((current_pop - previous_pop) / previous_pop) * 100
-            df.loc[current_idx, 'population_growth_rate'] = growth_rate
+# growth_rate = (current - previous) / previous * 100
+prev_pop = df.groupby("county")["population"].shift(1)
+df["population_growth_rate"] = np.where(
+    prev_pop != 0,
+    (df["population"] - prev_pop) / prev_pop * 100.0,
+    np.nan,
+)
 
 if not NO_PLOTS:
     # Also calculate growth rates for original data (for comparison on graph)
@@ -157,31 +148,14 @@ if not NO_PLOTS:
                 df_original.loc[current_idx, 'population_growth_rate'] = growth_rate
 
 # 5. Add Lagged Growth Rate Features (t-1 and t-2) on training data
-print("\nAdding lagged growth rate features (t-1 and t-2)...")
+print("\nAdding lagged growth rate features (t-1 and t-2, vectorized)...")
 
-df['growth_rate_lag1'] = np.nan  # Previous year's growth rate
-df['growth_rate_lag2'] = np.nan  # Two years ago growth rate
+df["growth_rate_lag1"] = df.groupby("county")["population_growth_rate"].shift(1)
+df["growth_rate_lag2"] = df.groupby("county")["population_growth_rate"].shift(2)
 
-for county in df['county'].unique():
-    county_mask = df['county'] == county
-    county_indices = df[county_mask].index
-    
-    for i, idx in enumerate(county_indices):
-        current_growth = df.loc[idx, 'population_growth_rate']
-        
-        # Set lag1 (t-1): previous year's growth rate
-        if i >= 1:
-            df.loc[idx, 'growth_rate_lag1'] = df.loc[county_indices[i-1], 'population_growth_rate']
-        else:
-            # For first year with growth rate, use current year's value
-            df.loc[idx, 'growth_rate_lag1'] = current_growth
-        
-        # Set lag2 (t-2): two years ago growth rate
-        if i >= 2:
-            df.loc[idx, 'growth_rate_lag2'] = df.loc[county_indices[i-2], 'population_growth_rate']
-        else:
-            # For first or second year, use current year's value
-            df.loc[idx, 'growth_rate_lag2'] = current_growth
+# Match original behavior: for early entries where lags are missing, use current growth value.
+df["growth_rate_lag1"] = df["growth_rate_lag1"].fillna(df["population_growth_rate"])
+df["growth_rate_lag2"] = df["growth_rate_lag2"].fillna(df["population_growth_rate"])
 
 print("Sample data with lagged features:")
 print(df[['county', 'year', 'population_growth_rate', 'growth_rate_lag1', 'growth_rate_lag2']].head(20))
@@ -463,10 +437,10 @@ if eval_county:
         y = np.array(y_train_list)
         
         rf_model = RandomForestRegressor(
-            n_estimators=100, 
+            n_estimators=RF_N_ESTIMATORS, 
             random_state=42, 
-            max_depth=6,
-            n_jobs=-1
+            max_depth=RF_MAX_DEPTH,
+            n_jobs=RF_N_JOBS
         )
         rf_model.fit(X, y)
         
