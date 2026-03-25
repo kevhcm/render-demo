@@ -1,0 +1,10 @@
+__pycache__/
+.DS_Store
+
+# Demo / generated files
+*.csv
+*.png
+forecast_output.csv
+dummy_population.csv
+"County General Data.csv"
+
