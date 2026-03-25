@@ -10,12 +10,12 @@ from cut_csv import cut_first_rows
 app = Flask(__name__)
 
 
-@app.get("/health")
+@app.route("/health", methods=["GET"])
 def health() -> Response:
     return Response("ok\n", mimetype="text/plain")
 
 
-@app.post("/cut")
+@app.route("/cut", methods=["POST"])
 def cut() -> Response:
     """
     Accept multipart upload:
